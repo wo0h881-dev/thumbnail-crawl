@@ -242,11 +242,11 @@
     setStatus("⏳ 썸네일 검색 중...", "");
 
     try {
-      const res  = await fetch(WORKER_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pageId: selectedPageId, title: selectedTitle }),
-      });
+      const res = await fetch(`${WORKER_URL}/set-cover`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ pageId: selectedPageId, title: selectedTitle }),
+});
       const data = await res.json();
 
       if (data.ok) {
