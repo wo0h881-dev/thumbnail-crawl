@@ -2,116 +2,263 @@
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600&display=swap');
+
   * { box-sizing: border-box; margin: 0; padding: 0; }
+
   body {
-    font-family: -apple-system, sans-serif;
-    background: #1e1e2e;
-    color: #cdd6f4;
+    font-family: 'Noto Sans KR', sans-serif;
+    background: #ffffff;
     display: flex;
-    flex-direction: column;
     align-items: center;
     justify-content: center;
     min-height: 100vh;
-    padding: 24px;
-    gap: 12px;
+    padding: 20px;
   }
-  h2 { font-size: 16px; opacity: .7; }
+
+  .card {
+    width: 100%;
+    max-width: 360px;
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 12px;
+    padding: 20px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+  }
+
+  h2 {
+    font-size: 14px;
+    font-weight: 600;
+    color: #111;
+    margin-bottom: 14px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .search-wrap {
+    position: relative;
+    margin-bottom: 10px;
+  }
+
   input {
     width: 100%;
-    max-width: 400px;
-    padding: 10px 14px;
+    padding: 9px 12px;
+    border: 1px solid #d1d5db;
     border-radius: 8px;
-    border: 1px solid #45475a;
-    background: #313244;
-    color: #cdd6f4;
-    font-size: 15px;
+    font-size: 13px;
+    font-family: inherit;
+    color: #111;
     outline: none;
+    transition: border-color 0.15s;
   }
-  input:focus { border-color: #89b4fa; }
-  input#pageId { font-size: 13px; opacity: .8; }
+
+  input:focus { border-color: #6366f1; }
+
+  .dropdown {
+    display: none;
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0; right: 0;
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.1);
+    z-index: 100;
+    max-height: 200px;
+    overflow-y: auto;
+  }
+
+  .dropdown.show { display: block; }
+
+  .dropdown-item {
+    padding: 9px 12px;
+    font-size: 13px;
+    color: #374151;
+    cursor: pointer;
+    transition: background 0.1s;
+  }
+
+  .dropdown-item:hover { background: #f3f4f6; }
+  .dropdown-item.empty { color: #9ca3af; cursor: default; }
+
   button {
-    padding: 10px 28px;
-    background: #89b4fa;
-    color: #1e1e2e;
+    width: 100%;
+    padding: 10px;
+    background: #111;
+    color: #fff;
     border: none;
     border-radius: 8px;
-    font-size: 15px;
-    font-weight: 600;
+    font-size: 13px;
+    font-weight: 500;
+    font-family: inherit;
     cursor: pointer;
+    transition: background 0.15s;
+    margin-top: 4px;
   }
-  button:disabled { opacity: .5; cursor: not-allowed; }
-  #status { font-size: 13px; min-height: 20px; }
+
+  button:hover:not(:disabled) { background: #374151; }
+  button:disabled { background: #9ca3af; cursor: not-allowed; }
+
+  #status {
+    margin-top: 10px;
+    font-size: 12px;
+    text-align: center;
+    min-height: 18px;
+    color: #6b7280;
+  }
+
+  #status.success { color: #059669; }
+  #status.error   { color: #dc2626; }
+
+  #preview {
+    margin-top: 12px;
+    display: none;
+    text-align: center;
+  }
+
+  #preview img {
+    max-width: 100%;
+    max-height: 160px;
+    border-radius: 6px;
+    object-fit: cover;
+    border: 1px solid #e5e7eb;
+  }
 </style>
 </head>
 <body>
-  <h2>📚 썸네일 자동 설정</h2>
-  <input id="title"  type="text" placeholder="작품 제목 입력" />
-  <input id="pageId" type="text" placeholder="노션 페이지 ID (32자)" />
-  <button id="btn" onclick="trigger()">커버 설정</button>
+<div class="card">
+  <h2>📚 커버 썸네일 설정</h2>
+
+  <div class="search-wrap">
+    <input
+      id="searchInput"
+      type="text"
+      placeholder="작품 제목 검색..."
+      autocomplete="off"
+    />
+    <div class="dropdown" id="dropdown"></div>
+  </div>
+
+  <button id="btn" onclick="setCover()" disabled>커버 설정</button>
+
   <div id="status"></div>
+  <div id="preview"><img id="previewImg" src="" alt="썸네일 미리보기" /></div>
+</div>
 
 <script>
-  // GitHub 정보 — 본인 저장소로 변경
-  const GITHUB_OWNER = "YOUR_GITHUB_USERNAME";
-  const GITHUB_REPO  = "YOUR_REPO_NAME";
-  const GITHUB_TOKEN = "YOUR_GITHUB_PAT";  // repo + workflow 권한 PAT
+  // ── 여기만 수정 ──────────────────────────────
+  const WORKER_URL = "https://YOUR_WORKER.YOUR_SUBDOMAIN.workers.dev";
+  // ────────────────────────────────────────────
 
-  async function trigger() {
-    const title  = document.getElementById("title").value.trim();
-    const pageId = document.getElementById("pageId").value.trim().replace(/-/g, "");
-    const status = document.getElementById("status");
-    const btn    = document.getElementById("btn");
+  let selectedPageId = null;
+  let selectedTitle  = null;
+  let searchTimer    = null;
 
-    if (!title || !pageId) {
-      status.textContent = "⚠️ 제목과 페이지 ID를 모두 입력해주세요.";
-      return;
+  const input    = document.getElementById("searchInput");
+  const dropdown = document.getElementById("dropdown");
+  const btn      = document.getElementById("btn");
+  const status   = document.getElementById("status");
+  const preview  = document.getElementById("preview");
+  const previewImg = document.getElementById("previewImg");
+
+  input.addEventListener("input", () => {
+    const q = input.value.trim();
+    selectedPageId = null;
+    selectedTitle  = null;
+    btn.disabled   = true;
+    preview.style.display = "none";
+
+    clearTimeout(searchTimer);
+    if (q.length < 1) { hideDropdown(); return; }
+
+    searchTimer = setTimeout(() => fetchSuggestions(q), 300);
+  });
+
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest(".search-wrap")) hideDropdown();
+  });
+
+  async function fetchSuggestions(q) {
+    try {
+      const res  = await fetch(`${WORKER_URL}/search?q=${encodeURIComponent(q)}`);
+      const list = await res.json();
+
+      if (!list.length) {
+        showDropdown([{ id: null, title: "검색 결과 없음" }], true);
+        return;
+      }
+      showDropdown(list, false);
+    } catch (e) {
+      showDropdown([{ id: null, title: "검색 오류" }], true);
     }
+  }
+
+  function showDropdown(list, empty) {
+    dropdown.innerHTML = "";
+    list.forEach(item => {
+      const div = document.createElement("div");
+      div.className = "dropdown-item" + (empty ? " empty" : "");
+      div.textContent = item.title;
+      if (!empty) {
+        div.onclick = () => selectItem(item);
+      }
+      dropdown.appendChild(div);
+    });
+    dropdown.classList.add("show");
+  }
+
+  function hideDropdown() {
+    dropdown.classList.remove("show");
+    dropdown.innerHTML = "";
+  }
+
+  function selectItem(item) {
+    input.value    = item.title;
+    selectedPageId = item.id;
+    selectedTitle  = item.title;
+    btn.disabled   = false;
+    hideDropdown();
+    setStatus("", "");
+  }
+
+  async function setCover() {
+    if (!selectedPageId || !selectedTitle) return;
 
     btn.disabled = true;
-    status.textContent = "⏳ GitHub Actions 실행 중...";
+    preview.style.display = "none";
+    setStatus("⏳ 썸네일 검색 중...", "");
 
     try {
-      const res = await fetch(
-        `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/actions/workflows/thumbnail.yml/dispatches`,
-        {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${GITHUB_TOKEN}`,
-            "Accept": "application/vnd.github+json",
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            ref: "main",
-            inputs: { title, page_id: pageId }
-          })
-        }
-      );
+      const res  = await fetch(WORKER_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pageId: selectedPageId, title: selectedTitle }),
+      });
+      const data = await res.json();
 
-      if (res.status === 204) {
-        status.textContent = "✅ 실행됨! 30~60초 후 노션을 새로고침하세요.";
+      if (data.ok) {
+        setStatus("✅ 커버 설정 완료!", "success");
+        if (data.imgUrl) {
+          previewImg.src        = data.imgUrl;
+          preview.style.display = "block";
+        }
       } else {
-        const err = await res.text();
-        status.textContent = `❌ 오류 ${res.status}: ${err}`;
+        setStatus("❌ " + (data.message || "실패"), "error");
       }
     } catch (e) {
-      status.textContent = "❌ 네트워크 오류: " + e.message;
+      setStatus("❌ 네트워크 오류", "error");
     } finally {
       btn.disabled = false;
     }
   }
+
+  function setStatus(msg, type) {
+    status.textContent  = msg;
+    status.className    = type;
+  }
 </script>
 </body>
 </html>
-```
-
----
-
-## 3. 설정 순서
-
-**① GitHub 저장소 준비**
-```
-your-repo/
-├── .github/workflows/thumbnail.yml
-├── crawl.py
-└── widget.html          ← GitHub Pages로 호스팅
