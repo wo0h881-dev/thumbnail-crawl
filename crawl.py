@@ -91,29 +91,24 @@ def search_naver(title: str) -> Optional[str]:
 
         matches = re.findall(r'<img[^>]+src="([^"]+)"', html, re.I)
 
-        src = None
-        for m in matches:
-            if re.search(r"comic|novel|book|cover|thumbnail|thumb", m, re.I):
-                src = m
-                break
+        src = next(
+            (v for v in matches if re.search(r"comicthumb-phinf\.pstatic\.net", v, re.I)),
+            None
+        )
 
         if not src:
-            for m in matches:
-                if re.search(r"type=m140|type=m1", m, re.I):
-                    src = m
-                    break
+            src = next(
+                (v for v in matches if re.search(r"type=m\d+", v, re.I)),
+                None
+            )
 
         if not src:
             return None
 
-        src = src.split("#")[0]
         src = ensure_absolute_url(src)
 
-        if src and "type=m1" in src:
-            src = src.replace("type=m1", "type=m140")
-
-        if src and not re.search(r"\.(jpg|jpeg|png|webp)(\?|$)", src, re.I):
-            src += "&.jpg" if "?" in src else "?.jpg"
+        if "type=m1" in src:
+            src = src.replace("type=m1", "type=m260")
 
         return src
     except Exception as e:
@@ -131,74 +126,86 @@ def search_ridi(title: str) -> Optional[str]:
 
         matches = re.findall(r'(?:src|data-src)="([^"]+)"', html, re.I)
 
-        src = None
-        for m in matches:
-            if re.search(r"img\.ridicdn\.net", m, re.I):
-                src = m
-                break
+        candidates = [
+            ensure_absolute_url(m)
+            for m in matches
+            if m
+            and re.match(r"^https?://", m)
+            and not re.search(r"active\.ridibooks\.com/badge/", m, re.I)   # ❌ 배지 제거
+            and re.search(r"img\.ridicdn\.net/cover/", m, re.I)           # ✅ 진짜 커버만
+        ]
 
-        if not src:
-            for m in matches:
-                if re.search(r"thumbnail|cover", m, re.I):
-                    src = m
-                    break
-
-        if not src:
+        if not candidates:
             return None
 
-        src = ensure_absolute_url(src)
-        return src
+        # 고해상도 우선
+        for v in candidates:
+            if re.search(r"/xxlarge", v, re.I):
+                return v
+        for v in candidates:
+            if re.search(r"/large", v, re.I):
+                return v
+
+        return candidates[0]
+
     except Exception as e:
         print(f"[Ridi] error: {e}")
         return None
 
 
 def search_kakao(title: str) -> Optional[str]:
-    url = "https://page.kakao.com/graphql"
-    payload = {
-        "operationName": "SearchKeyword",
-        "variables": {
-            "keyword": title,
-            "page": 1,
-            "size": 5,
-        },
-        "query": """
-            query SearchKeyword($keyword: String!, $page: Int, $size: Int) {
-              searchKeyword(keyword: $keyword, page: $page, size: $size) {
-                list {
-                  thumbnail
-                  title
-                }
-              }
-            }
-        """,
-    }
     headers = {
-        "Content-Type": "application/json",
         "User-Agent": "Mozilla/5.0",
         "Referer": "https://page.kakao.com/",
     }
 
     try:
-        r = requests.post(url, json=payload, headers=headers, timeout=10)
-        data = r.json()
+        # 1️⃣ HTML 검색 먼저
+        url = f"https://page.kakao.com/search?word={requests.utils.quote(title)}"
+        r = requests.get(url, headers=headers, timeout=10)
+        html = r.text
+
+        matches = re.findall(r'<img[^>]+src="([^"]+)"', html, re.I)
+
+        src = next(
+            (v for v in matches if re.search(r"page-images\.kakaoentcdn\.com/download/resource", v, re.I)),
+            None
+        )
+
+        if src:
+            return ensure_absolute_url(src)
+
+        # 2️⃣ fallback (기존 GraphQL)
+        gql_url = "https://page.kakao.com/graphql"
+        payload = {
+            "operationName": "SearchKeyword",
+            "variables": {"keyword": title, "page": 1, "size": 5},
+            "query": """
+                query SearchKeyword($keyword: String!, $page: Int, $size: Int) {
+                  searchKeyword(keyword: $keyword, page: $page, size: $size) {
+                    list {
+                      thumbnail
+                      title
+                    }
+                  }
+                }
+            """
+        }
+
+        rr = requests.post(gql_url, json=payload, headers={
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0",
+            "Referer": "https://page.kakao.com/",
+        }, timeout=10)
+
+        data = rr.json()
         items = data.get("data", {}).get("searchKeyword", {}).get("list", [])
 
         if not items:
             return None
 
-        normalized_title = re.sub(r"\s+", "", title)
+        return ensure_absolute_url(items[0].get("thumbnail"))
 
-        exact = None
-        for item in items:
-            item_title = re.sub(r"\s+", "", item.get("title", ""))
-            if item_title == normalized_title:
-                exact = item
-                break
-
-        target = exact or items[0]
-        thumb = target.get("thumbnail")
-        return ensure_absolute_url(thumb) if thumb else None
     except Exception as e:
         print(f"[Kakao] error: {e}")
         return None
