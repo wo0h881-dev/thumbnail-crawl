@@ -182,19 +182,29 @@
   });
 
   async function fetchSuggestions(q) {
-    try {
-      const res  = await fetch(`${WORKER_URL}/search?q=${encodeURIComponent(q)}`);
-      const list = await res.json();
+  try {
+    const res = await fetch(`${WORKER_URL}/search?q=${encodeURIComponent(q)}`);
+    const data = await res.json();
 
-      if (!list.length) {
-        showDropdown([{ id: null, title: "검색 결과 없음" }], true);
-        return;
-      }
-      showDropdown(list, false);
-    } catch (e) {
+    if (!res.ok || data.ok === false) {
+      console.error("search error:", data);
       showDropdown([{ id: null, title: "검색 오류" }], true);
+      return;
     }
+
+    const list = data.results || [];
+
+    if (!list.length) {
+      showDropdown([{ id: null, title: "검색 결과 없음" }], true);
+      return;
+    }
+
+    showDropdown(list, false);
+  } catch (e) {
+    console.error(e);
+    showDropdown([{ id: null, title: "검색 오류" }], true);
   }
+}
 
   function showDropdown(list, empty) {
     dropdown.innerHTML = "";
