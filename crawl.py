@@ -78,6 +78,34 @@ def safe_json_response(resp: requests.Response) -> Dict[str, Any]:
         return {"raw": resp.text}
 
 
+def extract_all_image_candidates(html: str) -> list[str]:
+    out: list[str] = []
+
+    for m in re.findall(r'<img[^>]+src="([^"]+)"', html, re.I):
+        out.append(ensure_absolute_url(m))
+
+    for m in re.findall(r'(?:src|data-src)="([^"]+)"', html, re.I):
+        out.append(ensure_absolute_url(m))
+
+    for m in re.findall(r'srcset="([^"]+)"', html, re.I):
+        for part in m.split(","):
+            out.append(ensure_absolute_url(part.strip().split(" ")[0]))
+
+    for m in re.findall(r'content="([^"]+)"', html, re.I):
+        out.append(ensure_absolute_url(m))
+
+    cleaned = []
+    seen = set()
+    for item in out:
+        if not item:
+            continue
+        item = item.replace("&amp;", "&").split("#")[0]
+        if item not in seen:
+            seen.add(item)
+            cleaned.append(item)
+    return cleaned
+
+
 def search_naver(title: str) -> Optional[str]:
     url = (
         "https://series.naver.com/search/search.series"
@@ -88,24 +116,20 @@ def search_naver(title: str) -> Optional[str]:
     try:
         r = requests.get(url, headers=headers, timeout=10)
         html = r.text
-
-        matches = re.findall(r'<img[^>]+src="([^"]+)"', html, re.I)
+        matches = extract_all_image_candidates(html)
 
         src = next(
             (v for v in matches if re.search(r"comicthumb-phinf\.pstatic\.net", v, re.I)),
             None
         )
-
         if not src:
             src = next(
-                (v for v in matches if re.search(r"type=m\d+", v, re.I)),
+                (v for v in matches if re.search(r"pstatic\.net", v, re.I) and re.search(r"type=m\d+", v, re.I)),
                 None
             )
 
         if not src:
             return None
-
-        src = ensure_absolute_url(src)
 
         if "type=m1" in src:
             src = src.replace("type=m1", "type=m260")
@@ -123,31 +147,25 @@ def search_ridi(title: str) -> Optional[str]:
     try:
         r = requests.get(url, headers=headers, timeout=10)
         html = r.text
-
-        matches = re.findall(r'(?:src|data-src)="([^"]+)"', html, re.I)
+        matches = extract_all_image_candidates(html)
 
         candidates = [
-            ensure_absolute_url(m)
-            for m in matches
-            if m
-            and re.match(r"^https?://", m)
-            and not re.search(r"active\.ridibooks\.com/badge/", m, re.I)   # ❌ 배지 제거
-            and re.search(r"img\.ridicdn\.net/cover/", m, re.I)           # ✅ 진짜 커버만
+            v for v in matches
+            if re.match(r"^https?://", v, re.I)
+            and not re.search(r"active\.ridibooks\.com/badge/", v, re.I)
+            and re.search(r"img\.ridicdn\.net/cover/", v, re.I)
         ]
 
         if not candidates:
             return None
 
-        # 고해상도 우선
         for v in candidates:
             if re.search(r"/xxlarge", v, re.I):
                 return v
         for v in candidates:
             if re.search(r"/large", v, re.I):
                 return v
-
         return candidates[0]
-
     except Exception as e:
         print(f"[Ridi] error: {e}")
         return None
@@ -160,22 +178,21 @@ def search_kakao(title: str) -> Optional[str]:
     }
 
     try:
-        # 1️⃣ HTML 검색 먼저
         url = f"https://page.kakao.com/search?word={requests.utils.quote(title)}"
         r = requests.get(url, headers=headers, timeout=10)
         html = r.text
-
-        matches = re.findall(r'<img[^>]+src="([^"]+)"', html, re.I)
+        matches = extract_all_image_candidates(html)
 
         src = next(
             (v for v in matches if re.search(r"page-images\.kakaoentcdn\.com/download/resource", v, re.I)),
             None
         )
+        if not src:
+            src = next((v for v in matches if re.search(r"kakaoentcdn\.com", v, re.I)), None)
 
         if src:
-            return ensure_absolute_url(src)
+            return src
 
-        # 2️⃣ fallback (기존 GraphQL)
         gql_url = "https://page.kakao.com/graphql"
         payload = {
             "operationName": "SearchKeyword",
@@ -191,25 +208,33 @@ def search_kakao(title: str) -> Optional[str]:
                 }
             """
         }
-
-        rr = requests.post(gql_url, json=payload, headers={
+        gql_headers = {
             "Content-Type": "application/json",
             "User-Agent": "Mozilla/5.0",
             "Referer": "https://page.kakao.com/",
-        }, timeout=10)
+        }
 
+        rr = requests.post(gql_url, json=payload, headers=gql_headers, timeout=10)
         data = rr.json()
         items = data.get("data", {}).get("searchKeyword", {}).get("list", [])
 
         if not items:
             return None
 
-        return ensure_absolute_url(items[0].get("thumbnail"))
+        normalized_title = re.sub(r"\s+", "", title)
+        exact = None
+        for item in items:
+            item_title = re.sub(r"\s+", "", item.get("title", ""))
+            if item_title == normalized_title:
+                exact = item
+                break
 
+        target = exact or items[0]
+        thumb = target.get("thumbnail")
+        return ensure_absolute_url(thumb) if thumb else None
     except Exception as e:
         print(f"[Kakao] error: {e}")
         return None
-
 
 def set_notion_cover(page_id: str, img_url: str):
     page_id = normalize_notion_page_id(page_id)
