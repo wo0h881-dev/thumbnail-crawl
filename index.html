@@ -271,13 +271,14 @@
         body: JSON.stringify(payload),
       });
 
-      const data = await res.json();
+      const data = await res.json(); // ✅ 한 번만 선언합니다.
       console.log("SET COVER RESPONSE =", data);
-      const data = await res.json();
+      console.log("SET COVER DEBUG =", data.debug);
+      console.table(data.debug || []);
 
-console.log("SET COVER RESPONSE =", data);
-console.log("SET COVER DEBUG =", data.debug);
-console.table(data.debug || []);
+      if (data.ok) {
+        setStatus("✅ 커버 설정 완료!", "success");
+
 
       if (data.ok) {
         setStatus("✅ 커버 설정 완료!", "success");
