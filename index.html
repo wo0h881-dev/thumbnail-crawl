@@ -271,14 +271,11 @@
         body: JSON.stringify(payload),
       });
 
-      const data = await res.json(); // ✅ 한 번만 선언합니다.
+      // ✅ 여기서 data 변수를 한 번만 선언합니다.
+      const data = await res.json();
       console.log("SET COVER RESPONSE =", data);
       console.log("SET COVER DEBUG =", data.debug);
       console.table(data.debug || []);
-
-      if (data.ok) {
-        setStatus("✅ 커버 설정 완료!", "success");
-
 
       if (data.ok) {
         setStatus("✅ 커버 설정 완료!", "success");
@@ -289,7 +286,7 @@
       } else {
         setStatus("❌ " + (data.message || "실패"), "error");
       }
-    } catch (e) {
+    } catch (e) { // 🚨 보통 이 부분 바로 앞의 '}' 가 지워져서 catch 에러가 납니다!
       console.error("SET COVER FETCH ERROR =", e);
       setStatus("❌ 네트워크 오류", "error");
     } finally {
