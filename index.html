@@ -33,59 +33,7 @@
     font-weight: 600;
     color: #111;
     margin-bottom: 14px;
-    display: flex;
-    align-items: center;
-    gap: 6px;
   }
-
-  .search-wrap {
-    position: relative;
-    margin-bottom: 10px;
-  }
-
-  input {
-    width: 100%;
-    padding: 9px 12px;
-    border: 1px solid #d1d5db;
-    border-radius: 8px;
-    font-size: 13px;
-    font-family: inherit;
-    color: #111;
-    outline: none;
-    transition: border-color 0.15s;
-  }
-
-  input:focus { border-color: #6366f1; }
-
-  .dropdown {
-    display: none;
-    position: absolute;
-    top: calc(100% + 4px);
-    left: 0;
-    right: 0;
-    background: #fff;
-    border: 1px solid #e5e7eb;
-    border-radius: 8px;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.1);
-    z-index: 100;
-    max-height: 200px;
-    overflow-y: auto;
-  }
-
-  .dropdown.show { display: block; }
-
-  .dropdown-item {
-    padding: 9px 12px;
-    font-size: 13px;
-    color: #374151;
-    cursor: pointer;
-    transition: background 0.1s;
-    border-bottom: 1px solid #f9fafb;
-  }
-
-  .dropdown-item:hover { background: #f3f4f6; }
-  .dropdown-item:last-child { border-bottom: none; }
-  .dropdown-item.empty { color: #9ca3af; cursor: default; }
 
   button {
     width: 100%;
@@ -99,7 +47,6 @@
     font-family: inherit;
     cursor: pointer;
     transition: background 0.15s;
-    margin-top: 4px;
   }
 
   button:hover:not(:disabled) { background: #374151; }
@@ -119,31 +66,13 @@
 </head>
 <body>
 <div class="card">
-  <h2>📚 커버 썸네일 설정</h2>
-
-  <div class="search-wrap">
-    <input
-      id="searchInput"
-      type="text"
-      placeholder="작품 제목 검색...(테스트4)"
-      autocomplete="off"
-    />
-    <div class="dropdown" id="dropdown"></div>
-  </div>
-
-  <button id="btn" onclick="setCover()" disabled>🖼️ 커버 설정</button>
+  <h2>📚 웹소설 커버 설정</h2>
+  <button id="btn" onclick="runCrawl()">🖼️ 커버 없는 웹소설 업데이트</button>
   <div id="status"></div>
 </div>
 
 <script>
   const WORKER_URL = "https://thumbnail-worker.wo0h881.workers.dev";
-  let searchTimer = null;
-  let selectedPageId = null;
-  let selectedTitle = null;
-  let selectedPlatform = null;
-
-  const input = document.getElementById("searchInput");
-  const dropdown = document.getElementById("dropdown");
   const btn = document.getElementById("btn");
   const statusEl = document.getElementById("status");
 
@@ -152,93 +81,15 @@
     statusEl.className = type;
   }
 
-  input.addEventListener("input", () => {
-    const q = input.value.trim();
-    selectedPageId = null;
-    selectedTitle = null;
-    selectedPlatform = null;
+  async function runCrawl() {
     btn.disabled = true;
-    setStatus("");
-
-    clearTimeout(searchTimer);
-    if (q.length < 1) { hideDropdown(); return; }
-    searchTimer = setTimeout(() => fetchSuggestions(q), 300);
-  });
-
-  document.addEventListener("click", (e) => {
-    if (!e.target.closest(".search-wrap")) hideDropdown();
-  });
-
-  async function fetchSuggestions(q) {
-    try {
-      setStatus("🔍 검색 중...");
-      const res = await fetch(`${WORKER_URL}/search?q=${encodeURIComponent(q)}`);
-      const data = await res.json();
-
-      if (!res.ok || !data.ok) {
-        showDropdown([{ id: null, title: "검색 오류" }], true);
-        return;
-      }
-
-      const list = data.results || [];
-      if (!list.length) {
-        showDropdown([{ id: null, title: "검색 결과 없음" }], true);
-        setStatus("");
-        return;
-      }
-
-      showDropdown(list, false);
-      setStatus(`${list.length}개 결과`, "success");
-    } catch (e) {
-      setStatus("검색 연결 오류", "error");
-    }
-  }
-
-  function showDropdown(list, empty) {
-    dropdown.innerHTML = "";
-    list.forEach(item => {
-      const div = document.createElement("div");
-      div.className = "dropdown-item" + (empty ? " empty" : "");
-      div.textContent = item.title + (item.platform ? ` (${item.platform})` : "");
-      if (!empty) div.onclick = () => selectItem(item);
-      dropdown.appendChild(div);
-    });
-    dropdown.classList.add("show");
-  }
-
-  function hideDropdown() {
-    dropdown.classList.remove("show");
-    dropdown.innerHTML = "";
-  }
-
-  function selectItem(item) {
-    input.value = item.title;
-    selectedPageId = item.id;
-    selectedTitle = item.title;
-    selectedPlatform = item.platform;
-    btn.disabled = false;
-    hideDropdown();
-    setStatus(`✅ "${item.title}" 선택됨! 커버 설정 클릭하세요`, "success");
-  }
-
-  async function setCover() {
-    if (!selectedPageId || !selectedTitle) {
-      setStatus("❌ 먼저 검색해서 항목을 선택하세요", "error");
-      return;
-    }
-
-    btn.disabled = true;
-    setStatus("⏳ 크롤링 요청 중...");
+    setStatus("⏳ 요청 중...");
 
     try {
       const res = await fetch(`${WORKER_URL}/trigger-crawl`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          pageId: selectedPageId,
-          title: selectedTitle,
-          platform: selectedPlatform || "naver",
-        }),
+        body: JSON.stringify({}),
       });
 
       const data = await res.json();
@@ -255,7 +106,7 @@
     }
   }
 
-  setStatus("검색어를 입력하세요");
+  setStatus("버튼을 눌러 커버 없는 웹소설을 업데이트하세요.");
 </script>
 </body>
 </html>
