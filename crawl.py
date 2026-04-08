@@ -103,26 +103,35 @@ def crawl_ridi(title):
 
 def crawl_kakao(title):
     try:
-        # 카카오페이지 검색 (웹소설 카테고리 11)
-        url = f"https://page.kakao.com/search/result?keyword={requests.utils.quote(title)}&categoryUid=11"
+        url = f"https://bff-page.kakao.com/api/gateway/api/v1/search/series?keyword={requests.utils.quote(title)}&category_uid=11&is_complete=false&sort_type=ACCURACY&page=0&size=25"
         res = requests.get(url, headers={
-            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
-            "Accept-Language": "ko-KR,ko;q=0.9",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Referer": "https://page.kakao.com/",
+            "Origin": "https://page.kakao.com",
         }, timeout=10)
 
-        # 정규식으로 이미지 URL 추출
-        matches = re.findall(r'https://(?:dn-img-page\.kakao\.com|page-images\.kakaoentcdn\.com)/[^\s"\'<>]+', res.text)
-        if matches:
-            img = matches[0].replace("&amp;", "&").split('"')[0]
-            if "filename=" not in img:
-                img += "&filename=o1/dims/resize/384"
-            print(f"  ✅ 카카오: {img[:60]}")
-            return img
-        print(f"  ❌ 카카오 검색결과 없음")
+        if not res.ok:
+            print(f"  ❌ 카카오 API 응답 실패: {res.status_code}")
+            return None
+
+        data = res.json()
+        items = data.get("result", {}).get("list", [])
+        if not items:
+            print(f"  ❌ 카카오 검색결과 없음")
+            return None
+
+        thumbnail_key = items[0].get("thumbnail")
+        if not thumbnail_key:
+            print(f"  ❌ 카카오 썸네일 키 없음")
+            return None
+
+        img = f"https://dn-img-page.kakao.com/download/resource?kid={thumbnail_key}&filename=th3"
+        print(f"  ✅ 카카오: {img[:60]}")
+        return img
+
     except Exception as e:
         print(f"  ❌ 카카오 오류: {e}")
     return None
-
 
 def set_notion_cover(page_id, img_url):
     try:
