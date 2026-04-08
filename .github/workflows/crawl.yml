@@ -1,0 +1,21 @@
+name: Crawl Thumbnail
+
+on:
+  repository_dispatch:
+    types: [set-cover]
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      - run: pip install requests beautifulsoup4
+      - run: python crawl.py
+        env:
+          NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
+          PAGE_ID: ${{ github.event.client_payload.pageId }}
+          TITLE: ${{ github.event.client_payload.title }}
+          PLATFORM: ${{ github.event.client_payload.platform }}
