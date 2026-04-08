@@ -153,10 +153,9 @@
 
 <script>
   const WORKER_URL = "https://thumbnail-worker.wo0h881.workers.dev";
-
   let selectedPageId = null;
   let selectedTitle = null;
-  let searchTimer = null;
+  let selectedPlatform = null; // ✅ 플랫폼 저장용
 
   const input = document.getElementById("searchInput");
   const dropdown = document.getElementById("dropdown");
@@ -242,10 +241,10 @@
     input.value = item.title;
     selectedPageId = item.id;
     selectedTitle = item.title;
+    selectedPlatform = item.platform; // ✅ 노션에서 넘어온 플랫폼 정보 저장
     btn.disabled = false;
     hideDropdown();
     setStatus("", "");
-    console.log("SELECTED ITEM =", item);
   }
 
   async function setCover() {
@@ -255,28 +254,18 @@
     preview.style.display = "none";
     setStatus("⏳ 썸네일 검색 중...", "");
 
-    const requestUrl = `${WORKER_URL}/set-cover`;
-    const payload = {
-      pageId: selectedPageId,
-      title: selectedTitle,
-    };
-
-    console.log("SET COVER REQUEST URL =", requestUrl);
-    console.log("SET COVER PAYLOAD =", payload);
-
     try {
-      const res = await fetch(requestUrl, {
+      const res = await fetch(`${WORKER_URL}/set-cover`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({
+          pageId: selectedPageId,
+          title: selectedTitle,
+          platform: selectedPlatform // ✅ 플랫폼 힌트 포함 전송
+        }),
       });
 
-      // ✅ 여기서 data 변수를 한 번만 선언합니다.
       const data = await res.json();
-      console.log("SET COVER RESPONSE =", data);
-      console.log("SET COVER DEBUG =", data.debug);
-      console.table(data.debug || []);
-
       if (data.ok) {
         setStatus("✅ 커버 설정 완료!", "success");
         if (data.imgUrl) {
@@ -284,10 +273,10 @@
           preview.style.display = "block";
         }
       } else {
-        setStatus("❌ " + (data.message || "실패"), "error");
+        // 실패 시 디버그 로그를 슬쩍 보여주면 좋습니다
+        setStatus("❌ 찾지 못함 (플랫폼: " + (selectedPlatform || "전체") + ")", "error");
       }
-    } catch (e) { // 🚨 보통 이 부분 바로 앞의 '}' 가 지워져서 catch 에러가 납니다!
-      console.error("SET COVER FETCH ERROR =", e);
+    } catch (e) {
       setStatus("❌ 네트워크 오류", "error");
     } finally {
       btn.disabled = false;
