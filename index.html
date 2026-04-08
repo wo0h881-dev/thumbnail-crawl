@@ -80,9 +80,11 @@
     color: #374151;
     cursor: pointer;
     transition: background 0.1s;
+    border-bottom: 1px solid #f9fafb;
   }
 
   .dropdown-item:hover { background: #f3f4f6; }
+  .dropdown-item:last-child { border-bottom: none; }
   .dropdown-item.empty { color: #9ca3af; cursor: default; }
 
   button {
@@ -137,13 +139,13 @@
     <input
       id="searchInput"
       type="text"
-      placeholder="작품 제목 검색..."
+      placeholder="작품 제목 검색... (예: 도시낭인)"
       autocomplete="off"
     />
     <div class="dropdown" id="dropdown"></div>
   </div>
 
-  <button id="btn" onclick="setCover()" disabled>커버 설정</button>
+  <button id="btn" onclick="setCover()" disabled>🖼️ 커버 설정</button>
 
   <div id="status"></div>
   <div id="preview">
@@ -153,7 +155,7 @@
 
 <script>
   const WORKER_URL = "https://thumbnail-worker.wo0h881.workers.dev";
-  let searchTimer = null; // ✅ 타이핑 에러 방지
+  let searchTimer = null;
   let selectedPageId = null;
   let selectedTitle = null;
   let selectedPlatform = null;
@@ -161,20 +163,27 @@
   const input = document.getElementById("searchInput");
   const dropdown = document.getElementById("dropdown");
   const btn = document.getElementById("btn");
-  const status = document.getElementById("status");
+  const statusEl = document.getElementById("status");
   const preview = document.getElementById("preview");
   const previewImg = document.getElementById("previewImg");
 
-  console.log("WIDGET LOADED");
-  console.log("SEARCH URL =", `${WORKER_URL}/search?q=test`);
-  console.log("SET COVER URL =", `${WORKER_URL}/set-cover`);
+  console.log("🚀 WIDGET LOADED - Worker:", WORKER_URL);
+
+  // ✅ 상태 표시 함수 (핵심!)
+  function setStatus(message, type = "") {
+    statusEl.textContent = message;
+    statusEl.className = type;
+    console.log("📊 Status:", message, type);
+  }
 
   input.addEventListener("input", () => {
     const q = input.value.trim();
     selectedPageId = null;
     selectedTitle = null;
+    selectedPlatform = null;
     btn.disabled = true;
     preview.style.display = "none";
+    setStatus("");
 
     clearTimeout(searchTimer);
     if (q.length < 1) {
@@ -191,16 +200,17 @@
 
   async function fetchSuggestions(q) {
     try {
+      setStatus("🔍 검색 중...", "");
       const url = `${WORKER_URL}/search?q=${encodeURIComponent(q)}`;
-      console.log("FETCH SUGGESTIONS =", url);
+      console.log("🔍 FETCH SUGGESTIONS =", url);
 
       const res = await fetch(url);
       const data = await res.json();
 
-      console.log("SEARCH RESPONSE =", data);
+      console.log("📋 SEARCH RESPONSE =", data);
 
       if (!res.ok || data.ok === false) {
-        console.error("search error:", data);
+        console.error("❌ search error:", data);
         showDropdown([{ id: null, title: "검색 오류" }], true);
         return;
       }
@@ -213,8 +223,10 @@
       }
 
       showDropdown(list, false);
+      setStatus(`${list.length}개 결과`, "success");
     } catch (e) {
-      console.error("SEARCH FETCH ERROR =", e);
+      console.error("❌ SEARCH FETCH ERROR =", e);
+      setStatus("검색 연결 오류", "error");
       showDropdown([{ id: null, title: "검색 오류" }], true);
     }
   }
@@ -224,7 +236,7 @@
     list.forEach(item => {
       const div = document.createElement("div");
       div.className = "dropdown-item" + (empty ? " empty" : "");
-      div.textContent = item.title;
+      div.textContent = item.title + (item.platform ? ` (${item.platform})` : "");
       if (!empty) {
         div.onclick = () => selectItem(item);
       }
@@ -242,20 +254,29 @@
     input.value = item.title;
     selectedPageId = item.id;
     selectedTitle = item.title;
-    selectedPlatform = item.platform; // ✅ 노션에서 넘어온 플랫폼 정보 저장
+    selectedPlatform = item.platform;
     btn.disabled = false;
     hideDropdown();
-    setStatus("", "");
+    setStatus(`✅ "${item.title}" 선택됨! 커버 설정 클릭하세요`, "success");
+    console.log("✅ SELECTED:", { selectedPageId: item.id.slice(0,8), selectedTitle, selectedPlatform });
   }
 
   async function setCover() {
-    if (!selectedPageId || !selectedTitle) return;
+    if (!selectedPageId || !selectedTitle) {
+      setStatus("❌ 먼저 검색해서 항목을 선택하세요", "error");
+      return;
+    }
 
     btn.disabled = true;
-    setStatus("⏳ 최적의 이미지를 찾는 중...", "");
+    setStatus("⏳ 네이버/카카오에서 이미지 검색 중...", "");
 
     try {
-      // ✅ 404 방지를 위해 경로 확인
+      console.log("🖼️ SET COVER START:", { 
+        pageId: selectedPageId.slice(0,8), 
+        title: selectedTitle, 
+        platform: selectedPlatform 
+      });
+
       const res = await fetch(`${WORKER_URL}/set-cover`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -267,19 +288,28 @@
       });
 
       const data = await res.json();
+      console.log("📤 SET COVER RESPONSE:", data);
+
       if (data.ok) {
         setStatus("✅ 노션 커버 설정 완료!", "success");
         previewImg.src = data.imgUrl;
         preview.style.display = "block";
       } else {
-        setStatus("❌ " + (data.message || "찾을 수 없음"), "error");
+        setStatus(`❌ ${data.message || "이미지 찾기 실패"}`, "error");
+        if (data.debug) {
+          console.log("🔍 DEBUG INFO:", data.debug);
+        }
       }
     } catch (e) {
+      console.error("💥 SET COVER ERROR:", e);
       setStatus("❌ 연결 오류가 발생했습니다.", "error");
     } finally {
       btn.disabled = false;
     }
   }
+
+  // 초기 상태
+  setStatus("검색어를 입력하세요", "");
 </script>
 </body>
 </html>
