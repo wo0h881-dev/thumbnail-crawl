@@ -2,8 +2,10 @@ name: Crawl Thumbnail
 
 on:
   schedule:
-    - cron: '0 15 * * *'  # 매일 한국시간 자정 (UTC 15시)
-  workflow_dispatch:  # 수동 실행도 가능
+    - cron: '0 15 * * *'
+  workflow_dispatch:
+  repository_dispatch:
+    types: [set-cover]
 
 jobs:
   crawl:
@@ -18,3 +20,6 @@ jobs:
         env:
           NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
           NOTION_DB_ID: ${{ secrets.NOTION_DB_ID }}
+          PAGE_ID: ${{ github.event.client_payload.pageId }}
+          TITLE: ${{ github.event.client_payload.title }}
+          PLATFORM: ${{ github.event.client_payload.platform }}
