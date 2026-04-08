@@ -20,14 +20,10 @@ def get_novels_without_cover():
     url = f"https://api.notion.com/v1/databases/{NOTION_DB_ID}/query"
     payload = {
     "filter": {
-        "and": [
-            {
-                "property": "연관 주제",
-                "relation": {
-                    "is_not_empty": True
-                }
-            }
-        ]
+        "property": "platform",
+        "select": {
+            "is_not_empty": True
+        }
     },
     "page_size": 100
 }
