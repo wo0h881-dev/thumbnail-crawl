@@ -153,10 +153,10 @@
 
 <script>
   const WORKER_URL = "https://thumbnail-worker.wo0h881.workers.dev";
-  let searchTimer = null; // ✅ 이 줄을 추가하세요!
+  let searchTimer = null; // ✅ 타이핑 에러 방지
   let selectedPageId = null;
   let selectedTitle = null;
-  let selectedPlatform = null; // ✅ 플랫폼 저장용
+  let selectedPlatform = null;
 
   const input = document.getElementById("searchInput");
   const dropdown = document.getElementById("dropdown");
@@ -252,41 +252,33 @@
     if (!selectedPageId || !selectedTitle) return;
 
     btn.disabled = true;
-    preview.style.display = "none";
-    setStatus("⏳ 썸네일 검색 중...", "");
+    setStatus("⏳ 최적의 이미지를 찾는 중...", "");
 
     try {
+      // ✅ 404 방지를 위해 경로 확인
       const res = await fetch(`${WORKER_URL}/set-cover`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           pageId: selectedPageId,
           title: selectedTitle,
-          platform: selectedPlatform // ✅ 플랫폼 힌트 포함 전송
+          platform: selectedPlatform
         }),
       });
 
       const data = await res.json();
       if (data.ok) {
-        setStatus("✅ 커버 설정 완료!", "success");
-        if (data.imgUrl) {
-          previewImg.src = data.imgUrl;
-          preview.style.display = "block";
-        }
+        setStatus("✅ 노션 커버 설정 완료!", "success");
+        previewImg.src = data.imgUrl;
+        preview.style.display = "block";
       } else {
-        // 실패 시 디버그 로그를 슬쩍 보여주면 좋습니다
-        setStatus("❌ 찾지 못함 (플랫폼: " + (selectedPlatform || "전체") + ")", "error");
+        setStatus("❌ " + (data.message || "찾을 수 없음"), "error");
       }
     } catch (e) {
-      setStatus("❌ 네트워크 오류", "error");
+      setStatus("❌ 연결 오류가 발생했습니다.", "error");
     } finally {
       btn.disabled = false;
     }
-  }
-
-  function setStatus(msg, type) {
-    status.textContent = msg;
-    status.className = type;
   }
 </script>
 </body>
