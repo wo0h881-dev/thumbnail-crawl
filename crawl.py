@@ -19,18 +19,18 @@ NOTION_HEADERS = {
 def get_novels_without_cover():
     url = f"https://api.notion.com/v1/databases/{NOTION_DB_ID}/query"
     payload = {
-        "filter": {
-            "and": [
-                {
-                    "property": "연관 주제",
-                    "multi_select": {
-                        "contains": "웹소설"
-                    }
+    "filter": {
+        "and": [
+            {
+                "property": "연관 주제",
+                "relation": {
+                    "is_not_empty": True
                 }
-            ]
-        },
-        "page_size": 100
-    }
+            }
+        ]
+    },
+    "page_size": 100
+}
 
     results = []
     while True:
