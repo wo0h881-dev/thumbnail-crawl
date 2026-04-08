@@ -1,4 +1,5 @@
 import os
+import re
 import requests
 from bs4 import BeautifulSoup
 
@@ -19,14 +20,14 @@ NOTION_HEADERS = {
 def get_novels_without_cover():
     url = f"https://api.notion.com/v1/databases/{NOTION_DB_ID}/query"
     payload = {
-    "filter": {
-        "property": "platform",
-        "select": {
-            "is_not_empty": True
-        }
-    },
-    "page_size": 100
-}
+        "filter": {
+            "property": "platform",
+            "select": {
+                "is_not_empty": True
+            }
+        },
+        "page_size": 100
+    }
 
     results = []
     while True:
@@ -34,11 +35,9 @@ def get_novels_without_cover():
         data = res.json()
 
         for page in data.get("results", []):
-            # 페이지 커버 없는 것만
             if page.get("cover"):
                 continue
 
-            # 제목 추출
             title_prop = page["properties"].get("제목") or page["properties"].get("이름")
             if not title_prop:
                 continue
@@ -46,7 +45,6 @@ def get_novels_without_cover():
             if not title:
                 continue
 
-            # platform 추출
             platform_prop = page["properties"].get("platform")
             platform = None
             if platform_prop:
@@ -66,73 +64,80 @@ def get_novels_without_cover():
 
 
 def crawl_naver(title):
-    url = f"https://series.naver.com/search/search.series?t=all&fs=novel&q={requests.utils.quote(title)}"
-    res = requests.get(url, headers=HEADERS)
-    soup = BeautifulSoup(res.text, "html.parser")
+    try:
+        url = f"https://series.naver.com/search/search.series?t=all&fs=novel&q={requests.utils.quote(title)}"
+        res = requests.get(url, headers=HEADERS, timeout=10)
+        soup = BeautifulSoup(res.text, "html.parser")
 
-    a = soup.select_one("a.pic[href*='productNo']")
-    if not a:
-        print(f"  ❌ 네이버 검색결과 없음")
-        return None
+        a = soup.select_one("a.pic[href*='productNo']")
+        if not a:
+            print(f"  ❌ 네이버 검색결과 없음")
+            return None
 
-    img = a.select_one("img")
-    if img and img.get("src"):
-        src = img["src"].replace("type=m79", "type=m260")
-        print(f"  ✅ 네이버: {src[:60]}")
-        return src
+        img = a.select_one("img")
+        if img and img.get("src"):
+            src = img["src"].replace("type=m79", "type=m260")
+            print(f"  ✅ 네이버: {src[:60]}")
+            return src
+    except Exception as e:
+        print(f"  ❌ 네이버 오류: {e}")
     return None
 
 
 def crawl_ridi(title):
-    url = f"https://ridibooks.com/search?q={requests.utils.quote(title)}&adult_exclude=n"
-    res = requests.get(url, headers=HEADERS)
-    soup = BeautifulSoup(res.text, "html.parser")
-
-    img = soup.select_one("img[src*='img.ridicdn.net/cover']")
-    if img and img.get("src"):
-        print(f"  ✅ 리디: {img['src'][:60]}")
-        return img["src"]
+    try:
+        url = f"https://ridibooks.com/search?q={requests.utils.quote(title)}&adult_exclude=n"
+        res = requests.get(url, headers=HEADERS, timeout=10)
+        
+        # 정규식으로 이미지 URL 추출
+        matches = re.findall(r'https://img\.ridicdn\.net/cover/[^\s"\'<>]+', res.text)
+        if matches:
+            img = matches[0].split('"')[0]
+            print(f"  ✅ 리디: {img[:60]}")
+            return img
+        print(f"  ❌ 리디 검색결과 없음")
+    except Exception as e:
+        print(f"  ❌ 리디 오류: {e}")
     return None
 
 
 def crawl_kakao(title):
-    url = f"https://api2-page.kakao.com/api/v5/store/search?query={requests.utils.quote(title)}&page=1&size=10&category_uid=11"
-    res = requests.get(url, headers={
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Referer": "https://page.kakao.com",
-    })
-    
-    if not res.ok:
-        print(f"  ❌ 카카오 API 응답 실패: {res.status_code}")
-        return None
-
     try:
-        data = res.json()
-        items = data.get("result", {}).get("content_list", [])
-        if not items:
-            print(f"  ❌ 카카오 검색결과 없음")
-            return None
-        
-        img = items[0].get("thumbnail_image_url") or items[0].get("cover_image_url")
-        if img:
+        # 카카오페이지 검색 (웹소설 카테고리 11)
+        url = f"https://page.kakao.com/search/result?keyword={requests.utils.quote(title)}&categoryUid=11"
+        res = requests.get(url, headers={
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
+            "Accept-Language": "ko-KR,ko;q=0.9",
+        }, timeout=10)
+
+        # 정규식으로 이미지 URL 추출
+        matches = re.findall(r'https://(?:dn-img-page\.kakao\.com|page-images\.kakaoentcdn\.com)/[^\s"\'<>]+', res.text)
+        if matches:
+            img = matches[0].replace("&amp;", "&").split('"')[0]
+            if "filename=" not in img:
+                img += "&filename=o1/dims/resize/384"
             print(f"  ✅ 카카오: {img[:60]}")
             return img
+        print(f"  ❌ 카카오 검색결과 없음")
     except Exception as e:
-        print(f"  ❌ 카카오 파싱 오류: {e}")
-    
+        print(f"  ❌ 카카오 오류: {e}")
     return None
 
 
 def set_notion_cover(page_id, img_url):
-    pid = page_id.replace("-", "")
-    pid = f"{pid[:8]}-{pid[8:12]}-{pid[12:16]}-{pid[16:20]}-{pid[20:]}"
+    try:
+        pid = page_id.replace("-", "")
+        pid = f"{pid[:8]}-{pid[8:12]}-{pid[12:16]}-{pid[16:20]}-{pid[20:]}"
 
-    res = requests.patch(
-        f"https://api.notion.com/v1/pages/{pid}",
-        headers=NOTION_HEADERS,
-        json={"cover": {"type": "external", "external": {"url": img_url}}}
-    )
-    return res.ok
+        res = requests.patch(
+            f"https://api.notion.com/v1/pages/{pid}",
+            headers=NOTION_HEADERS,
+            json={"cover": {"type": "external", "external": {"url": img_url}}}
+        )
+        return res.ok
+    except Exception as e:
+        print(f"  ❌ 노션 업데이트 오류: {e}")
+        return False
 
 
 crawlers = {
@@ -160,3 +165,5 @@ for novel in novels:
         print(f"  {'✅ 노션 커버 업데이트 완료' if ok else '❌ 노션 업데이트 실패'}")
     else:
         print(f"  ❌ 모든 플랫폼에서 이미지 찾기 실패")
+
+print("\n🎉 완료!")
