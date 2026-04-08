@@ -96,15 +96,30 @@ def crawl_ridi(title):
 
 
 def crawl_kakao(title):
-    url = f"https://page.kakao.com/search/result?keyword={requests.utils.quote(title)}&categoryUid=11"
-    res = requests.get(url, headers=HEADERS)
-    soup = BeautifulSoup(res.text, "html.parser")
+    url = f"https://api2-page.kakao.com/api/v5/store/search?query={requests.utils.quote(title)}&page=1&size=10&category_uid=11"
+    res = requests.get(url, headers={
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Referer": "https://page.kakao.com",
+    })
+    
+    if not res.ok:
+        print(f"  ❌ 카카오 API 응답 실패: {res.status_code}")
+        return None
 
-    img = soup.select_one("img[src*='dn-img-page.kakao.com'], img[src*='page-images.kakaoentcdn.com']")
-    if img and img.get("src"):
-        src = img["src"].split("&")[0] + "&filename=o1/dims/resize/384"
-        print(f"  ✅ 카카오: {src[:60]}")
-        return src
+    try:
+        data = res.json()
+        items = data.get("result", {}).get("content_list", [])
+        if not items:
+            print(f"  ❌ 카카오 검색결과 없음")
+            return None
+        
+        img = items[0].get("thumbnail_image_url") or items[0].get("cover_image_url")
+        if img:
+            print(f"  ✅ 카카오: {img[:60]}")
+            return img
+    except Exception as e:
+        print(f"  ❌ 카카오 파싱 오류: {e}")
+    
     return None
 
 
