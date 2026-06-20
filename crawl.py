@@ -163,17 +163,29 @@ def crawl_naver(title):
         detail_res = requests.get(detail_url, headers=HEADERS, timeout=10)
         detail_soup = BeautifulSoup(detail_res.text, "html.parser")
 
-        detail_text = detail_soup.get_text(" ", strip=True)
-        author, publisher = extract_author_publisher_from_text(detail_text)
+        author = None
+        publisher = None
 
-        # 상세 페이지에서 못 찾으면 검색 결과 카드 텍스트로 보조 추출
+        author_a = detail_soup.select_one("a[href*='authorNo']")
+        if author_a:
+            author = author_a.get_text(" ", strip=True)
+
+        publisher_a = detail_soup.select_one("a[href*='publisherNo']")
+        if publisher_a:
+            publisher = publisher_a.get_text(" ", strip=True)
+
         if not author or not publisher:
-            item = a.find_parent("li") or a.find_parent("div") or soup
-            item_text = item.get_text(" ", strip=True)
-            sub_author, sub_publisher = extract_author_publisher_from_text(item_text)
+            detail_text = detail_soup.get_text(" ", strip=True)
 
-            author = author or sub_author
-            publisher = publisher or sub_publisher
+            if not author:
+                author_match = re.search(r"글\s+([^\s|·,]+)", detail_text)
+                if author_match:
+                    author = author_match.group(1).strip()
+
+            if not publisher:
+                publisher_match = re.search(r"출판사\s+([^\s|·,]+)", detail_text)
+                if publisher_match:
+                    publisher = publisher_match.group(1).strip()
 
         print(f"  ✅ 네이버: cover={bool(cover)}, author={author}, publisher={publisher}")
 
