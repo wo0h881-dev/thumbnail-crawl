@@ -94,10 +94,57 @@ def get_novels_to_update():
     return results
 
 
+def clean_value(value):
+    if not value:
+        return None
+
+    value = str(value)
+    value = re.sub(r"\s+", " ", value)
+    value = value.replace("저자", "")
+    value = value.replace("작가", "")
+    value = value.replace("출판사", "")
+    value = value.replace("출판", "")
+    value = value.replace("제공", "")
+    value = value.strip(" :：|·,/")
+
+    return value.strip() or None
+
+
+def extract_author_publisher_from_text(text):
+    author = None
+    publisher = None
+
+    # 작가/글 라벨 뒤에 공백이 있을 때만 라벨로 인정
+    # 글근육 같은 작가명을 "근육"으로 자르지 않기 위함
+    author_patterns = [
+        r"(?:저자|작가|글)\s+([^|·,\n\r]+)",
+        r"작가명\s*[:：]\s*([^|·,\n\r]+)",
+    ]
+
+    publisher_patterns = [
+        r"(?:출판사|출판|제공)\s+([^|·,\n\r]+)",
+        r"출판사명\s*[:：]\s*([^|·,\n\r]+)",
+    ]
+
+    for pattern in author_patterns:
+        m = re.search(pattern, text)
+        if m:
+            author = clean_value(m.group(1))
+            break
+
+    for pattern in publisher_patterns:
+        m = re.search(pattern, text)
+        if m:
+            publisher = clean_value(m.group(1))
+            break
+
+    return author, publisher
+
+
 def crawl_naver(title):
     try:
-        url = f"https://series.naver.com/search/search.series?t=all&fs=novel&q={requests.utils.quote(title)}"
-        res = requests.get(url, headers=HEADERS, timeout=10)
+        search_url = f"https://series.naver.com/search/search.series?t=all&fs=novel&q={requests.utils.quote(title)}"
+        res = requests.get(search_url, headers=HEADERS, timeout=10)
         soup = BeautifulSoup(res.text, "html.parser")
 
         a = soup.select_one("a.pic[href*='productNo']")
@@ -110,19 +157,23 @@ def crawl_naver(title):
         if img and img.get("src"):
             cover = img["src"].replace("type=m79", "type=m260")
 
-        item = a.find_parent("li") or a.find_parent("div") or soup
-        text = item.get_text(" ", strip=True)
+        href = a.get("href", "")
+        detail_url = "https://series.naver.com" + href if href.startswith("/") else href
 
-        author = None
-        publisher = None
+        detail_res = requests.get(detail_url, headers=HEADERS, timeout=10)
+        detail_soup = BeautifulSoup(detail_res.text, "html.parser")
 
-        author_match = re.search(r"(?:글|작가)\s*[:：]?\s*([^\s|·]+)", text)
-        if author_match:
-            author = author_match.group(1).strip()
+        detail_text = detail_soup.get_text(" ", strip=True)
+        author, publisher = extract_author_publisher_from_text(detail_text)
 
-        publisher_match = re.search(r"(?:출판사|출판)\s*[:：]?\s*([^\s|·]+)", text)
-        if publisher_match:
-            publisher = publisher_match.group(1).strip()
+        # 상세 페이지에서 못 찾으면 검색 결과 카드 텍스트로 보조 추출
+        if not author or not publisher:
+            item = a.find_parent("li") or a.find_parent("div") or soup
+            item_text = item.get_text(" ", strip=True)
+            sub_author, sub_publisher = extract_author_publisher_from_text(item_text)
+
+            author = author or sub_author
+            publisher = publisher or sub_publisher
 
         print(f"  ✅ 네이버: cover={bool(cover)}, author={author}, publisher={publisher}")
 
@@ -136,7 +187,6 @@ def crawl_naver(title):
         print(f"  ❌ 네이버 오류: {e}")
 
     return None
-
 
 def crawl_ridi(title):
     try:
