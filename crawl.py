@@ -180,17 +180,18 @@ def crawl_naver(title):
             if author_match:
                 author = clean_value(author_match.group(1))
 
-        publisher_match = re.search(r"출판사\s+([^\s|·,]+)", detail_text)
-        if publisher_match:
-            publisher = clean_value(publisher_match.group(1))
+        publisher_span = detail_soup.find("span", string="출판사")
+        if publisher_span:
+            parent_li = publisher_span.find_parent("li")
+            if parent_li:
+                publisher_a = parent_li.find("a")
+                if publisher_a:
+                    publisher = clean_value(publisher_a.get_text(" ", strip=True))
 
         if not publisher:
-            publisher_links = detail_soup.select("a[href*='publisherNo']")
-            for publisher_a in publisher_links:
-                candidate = clean_value(publisher_a.get_text(" ", strip=True))
-                if candidate:
-                    publisher = candidate
-                    break
+            publisher_match = re.search(r"출판사\s+([^\s|·,]+)", detail_text)
+            if publisher_match:
+                publisher = clean_value(publisher_match.group(1))
 
         print(f"  ✅ 네이버: cover={bool(cover)}, author={author}, publisher={publisher}")
 
