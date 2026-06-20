@@ -1,15 +1,11 @@
 import os
 import re
+import json
 import requests
-from bs4 import BeautifulSoup
-from playwright.sync_api import sync_playwright
+from pathlib import Path
 
 NOTION_API_KEY = os.environ["NOTION_API_KEY"]
 NOTION_DB_ID = os.environ["NOTION_DB_ID"]
-
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-}
 
 NOTION_HEADERS = {
     "Authorization": f"Bearer {NOTION_API_KEY}",
@@ -17,13 +13,25 @@ NOTION_HEADERS = {
     "Notion-Version": "2022-06-28",
 }
 
-BASE_RIDI_URL = "https://ridibooks.com"
+CACHE_FILES = [
+    "public/data/kakao-promotions-today.json",
+    "public/data/naver-promotions-today.json",
+    "public/data/ridi-promotions-today.json",
 
-RIDI_CATEGORY_URLS = [
-    "https://ridibooks.com/bestsellers/fantasy_serial",
-    "https://ridibooks.com/bestsellers/romance_serial",
-    "https://ridibooks.com/bestsellers/romance_fantasy_serial",
-    "https://ridibooks.com/bestsellers/bl-webnovel",
+    "public/data/kakao-today.json",
+    "public/data/naver-today.json",
+    "public/data/ridi-today.json",
+    "public/data/combined-today.json",
+
+    "out/kakao.json",
+    "out/naver.json",
+    "out/ridi.json",
+    "out/combined.json",
+
+    "kakao.json",
+    "naver.json",
+    "ridi.json",
+    "combined.json",
 ]
 
 
@@ -32,7 +40,7 @@ def rich_text(value):
 
 
 def clean_value(value):
-    if not value:
+    if value is None:
         return None
 
     value = str(value)
@@ -46,62 +54,16 @@ def clean_value(value):
     return value
 
 
+def normalize_title(value):
+    return re.sub(r"\s+", "", str(value or "").strip())
+
+
 def get_plain_text(prop):
     if not prop:
         return ""
 
     values = prop.get("title") or prop.get("rich_text") or []
     return "".join(t.get("plain_text", "") for t in values).strip()
-
-
-def fetch_soup_playwright(url, click_info_tab=False):
-    with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=True,
-            args=["--no-sandbox", "--disable-dev-shm-usage"],
-        )
-
-        page = browser.new_page(
-            user_agent=HEADERS["User-Agent"],
-            viewport={"width": 1365, "height": 900},
-            locale="ko-KR",
-        )
-
-        page.goto(url, wait_until="networkidle", timeout=45000)
-        page.wait_for_timeout(1500)
-
-        if click_info_tab:
-            try:
-                info_tab = page.locator("span.font-small1", has_text="정보").first
-                if info_tab.count() > 0:
-                    info_tab.click()
-                    page.wait_for_timeout(1000)
-            except Exception as e:
-                print("  ⚠️ 정보 탭 클릭 실패:", e)
-
-        html = page.content()
-        browser.close()
-
-    return BeautifulSoup(html, "html.parser")
-
-
-def deep_find(obj, keys):
-    if isinstance(obj, dict):
-        for k, v in obj.items():
-            if k in keys and v:
-                return v
-
-            found = deep_find(v, keys)
-            if found:
-                return found
-
-    if isinstance(obj, list):
-        for item in obj:
-            found = deep_find(item, keys)
-            if found:
-                return found
-
-    return None
 
 
 def get_novels_to_update():
@@ -146,7 +108,7 @@ def get_novels_to_update():
             results.append({
                 "id": page["id"],
                 "title": title,
-                "platform": platform or "naver",
+                "platform": platform or "",
                 "needs_cover": needs_cover,
                 "needs_author": needs_author,
                 "needs_publisher": needs_publisher,
@@ -160,237 +122,103 @@ def get_novels_to_update():
     return results
 
 
-def crawl_naver(title):
-    try:
-        search_url = f"https://series.naver.com/search/search.series?t=all&fs=novel&q={requests.utils.quote(title)}"
-        res = requests.get(search_url, headers=HEADERS, timeout=10)
-        soup = BeautifulSoup(res.text, "html.parser")
+def iter_json_items(obj):
+    if isinstance(obj, list):
+        for item in obj:
+            yield from iter_json_items(item)
 
-        a = soup.select_one("a.pic[href*='productNo']")
-        if not a:
-            print("  ❌ 네이버 검색결과 없음")
-            return None
+    elif isinstance(obj, dict):
+        if obj.get("title") or obj.get("제목"):
+            yield obj
 
-        cover = None
-        img = a.select_one("img")
-        if img and img.get("src"):
-            cover = img["src"].replace("type=m79", "type=m260")
-
-        href = a.get("href", "")
-        detail_url = "https://series.naver.com" + href if href.startswith("/") else href
-
-        detail_res = requests.get(detail_url, headers=HEADERS, timeout=10)
-        detail_soup = BeautifulSoup(detail_res.text, "html.parser")
-        detail_text = detail_soup.get_text(" ", strip=True)
-
-        author = None
-        publisher = None
-
-        author_a = detail_soup.select_one("a[href*='authorNo']")
-        if author_a:
-            author = clean_value(author_a.get_text(" ", strip=True))
-
-        if not author:
-            author_match = re.search(r"글\s+([^\s|·,]+)", detail_text)
-            if author_match:
-                author = clean_value(author_match.group(1))
-
-        publisher_span = detail_soup.find("span", string="출판사")
-        if publisher_span:
-            parent_li = publisher_span.find_parent("li")
-            if parent_li:
-                publisher_a = parent_li.find("a")
-                if publisher_a:
-                    publisher = clean_value(publisher_a.get_text(" ", strip=True))
-
-        if not publisher:
-            publisher_match = re.search(r"출판사\s+([^\s|·,]+)", detail_text)
-            if publisher_match:
-                publisher = clean_value(publisher_match.group(1))
-
-        print(f"  ✅ 네이버: cover={bool(cover)}, author={author}, publisher={publisher}")
-
-        return {
-            "cover": cover,
-            "author": author,
-            "publisher": publisher,
-        }
-
-    except Exception as e:
-        print(f"  ❌ 네이버 오류: {e}")
-
-    return None
+        for value in obj.values():
+            yield from iter_json_items(value)
 
 
-def crawl_ridi(title):
-    try:
-        for url in RIDI_CATEGORY_URLS:
-            soup = fetch_soup_playwright(url)
-
-            cards = [
-                li for li in soup.select("li")
-                if li.select_one("a.fig-w1hthz")
-            ]
-
-            for item in cards:
-                title_tag = item.select_one("a.fig-w1hthz")
-                item_title = clean_value(title_tag.get_text(" ", strip=True)) if title_tag else None
-
-                if item_title != title:
-                    continue
-
-                work_path = title_tag.get("href", "")
-                work_id = ""
-
-                m_id = re.search(r"/books/(\d+)", work_path)
-                if m_id:
-                    work_id = m_id.group(1)
-
-                cover = None
-
-                img = item.select_one("img[alt]")
-                if img:
-                    srcset = img.get("srcset", "")
-                    if srcset:
-                        candidates = [x.strip().split(" ")[0] for x in srcset.split(",")]
-                        large_candidates = [
-                            c for c in candidates
-                            if "/large" in c or "/xxlarge" in c
-                        ]
-                        cover = large_candidates[0] if large_candidates else candidates[-1]
-                    else:
-                        cover = img.get("src")
-
-                if not cover and work_id:
-                    cover = f"https://img.ridicdn.net/cover/{work_id}/large#1"
-
-                author_tag = item.select_one("a.fig-103urjl.e1s6unbg0")
-                publisher_tag = item.select_one("a.fig-103urjl.efs2tg41")
-
-                author = clean_value(author_tag.get_text(" ", strip=True)) if author_tag else None
-                publisher = clean_value(publisher_tag.get_text(" ", strip=True)) if publisher_tag else None
-
-                print(f"  ✅ 리디: cover={bool(cover)}, author={author}, publisher={publisher}")
-
-                return {
-                    "cover": cover,
-                    "author": author,
-                    "publisher": publisher,
-                }
-
-        print("  ❌ 리디 순위 페이지에서 제목 없음")
+def pick_best_result(results):
+    if not results:
         return None
 
-    except Exception as e:
-        print(f"  ❌ 리디 오류: {e}")
-
-    return None
-
-
-def crawl_kakao(title):
-    try:
-        search_url = (
-            "https://bff-page.kakao.com/api/gateway/api/v1/search/series"
-            f"?keyword={requests.utils.quote(title)}"
-            "&category_uid=11&is_complete=false&sort_type=ACCURACY&page=0&size=25"
+    def score(item):
+        return sum(
+            1 for key in ["cover", "author", "publisher"]
+            if item.get(key)
         )
 
-        kakao_headers = {
-            "User-Agent": HEADERS["User-Agent"],
-            "Referer": "https://page.kakao.com/",
-            "Origin": "https://page.kakao.com",
-            "Accept-Language": "ko-KR,ko;q=0.9",
-        }
+    return max(results, key=score)
 
-        res = requests.get(search_url, headers=kakao_headers, timeout=15)
 
-        if not res.ok:
-            print(f"  ❌ 카카오 API 응답 실패: {res.status_code}")
-            return None
+def search_from_cache(title):
+    target = normalize_title(title)
+    found_results = []
 
-        data = res.json()
-        items = data.get("result", {}).get("list", [])
-        if not items:
-            print("  ❌ 카카오 검색결과 없음")
-            return None
+    for file_path in CACHE_FILES:
+        path = Path(file_path)
 
-        item = items[0]
+        if not path.exists():
+            continue
 
-        thumbnail_key = deep_find(item, ["thumbnail", "thumbnailUrl", "image"])
-        cover = (
-            f"https://dn-img-page.kakao.com/download/resource?kid={thumbnail_key}&filename=th3"
-            if thumbnail_key and not str(thumbnail_key).startswith("http")
-            else thumbnail_key
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            for item in iter_json_items(data):
+                item_title = item.get("title") or item.get("제목")
+
+                if normalize_title(item_title) != target:
+                    continue
+
+                cover = (
+                    item.get("thumbnail")
+                    or item.get("thumbnailUrl")
+                    or item.get("cover")
+                    or item.get("coverUrl")
+                    or item.get("image")
+                    or item.get("표지")
+                )
+
+                author = (
+                    item.get("author")
+                    or item.get("저자")
+                    or item.get("저자 / 감독")
+                    or item.get("writer")
+                    or item.get("작가")
+                )
+
+                publisher = (
+                    item.get("출판사")
+                    or item.get("publisher")
+                    or item.get("publisherName")
+                    or item.get("provider")
+                    or item.get("cpName")
+                    or item.get("발행자")
+                )
+
+                result = {
+                    "cover": str(cover).strip() if cover else None,
+                    "author": clean_value(author),
+                    "publisher": clean_value(publisher),
+                    "source_file": file_path,
+                }
+
+                if result["cover"] or result["author"] or result["publisher"]:
+                    found_results.append(result)
+
+        except Exception as e:
+            print(f"  ⚠️ 캐시 읽기 실패: {file_path} / {e}")
+
+    best = pick_best_result(found_results)
+
+    if best:
+        print(
+            f"  ✅ 캐시 발견: {best['source_file']} / "
+            f"cover={bool(best.get('cover'))}, "
+            f"author={best.get('author')}, "
+            f"publisher={best.get('publisher')}"
         )
+        return best
 
-        author = deep_find(item, [
-            "author",
-            "writer",
-            "authors",
-            "artist",
-            "authorName",
-            "writerName",
-        ])
-
-        if isinstance(author, list):
-            author = ", ".join(
-                str(a.get("name", a)) if isinstance(a, dict) else str(a)
-                for a in author
-            )
-
-        publisher = deep_find(item, [
-            "publisher",
-            "publisherName",
-            "cpName",
-            "provider",
-            "providerName",
-            "company",
-            "companyName",
-            "copyright",
-        ])
-
-        content_id = deep_find(item, [
-            "seriesId",
-            "id",
-            "productId",
-            "contentId",
-            "series_id",
-            "content_id",
-            "uid",
-        ])
-
-        if not publisher and content_id:
-            detail_url = f"https://page.kakao.com/content/{content_id}"
-            detail_soup = fetch_soup_playwright(detail_url, click_info_tab=True)
-
-            publisher_span = detail_soup.find("span", string="발행자")
-            if publisher_span:
-                parent = publisher_span.find_parent("div")
-                if parent:
-                    spans = parent.find_all("span")
-                    if len(spans) >= 2:
-                        publisher = spans[1].get_text(" ", strip=True)
-
-            if not publisher:
-                detail_text = detail_soup.get_text(" ", strip=True)
-                m = re.search(r"발행자\s+([^\s|·,]+)", detail_text)
-                if m:
-                    publisher = m.group(1).strip()
-
-        author = clean_value(author)
-        publisher = clean_value(publisher)
-
-        print(f"  ✅ 카카오: cover={bool(cover)}, author={author}, publisher={publisher}")
-
-        return {
-            "cover": cover,
-            "author": author,
-            "publisher": publisher,
-        }
-
-    except Exception as e:
-        print(f"  ❌ 카카오 오류: {e}")
-
+    print("  ❌ 캐시에서 정보 없음")
     return None
 
 
@@ -437,34 +265,18 @@ def update_notion_page(page_id, found, novel):
         return False
 
 
-crawlers = {
-    "naver": crawl_naver,
-    "ridi": crawl_ridi,
-    "kakao": crawl_kakao,
-}
-
-
 novels = get_novels_to_update()
 print(f"📚 업데이트 필요한 웹소설: {len(novels)}개")
 
 for novel in novels:
     print(f"\n🔍 [{novel['platform']}] {novel['title']}")
 
-    order = [novel["platform"]] + [
-        p for p in ["naver", "ridi", "kakao"] if p != novel["platform"]
-    ]
-
-    found = None
-
-    for platform in order:
-        found = crawlers[platform](novel["title"])
-        if found and (found.get("cover") or found.get("author") or found.get("publisher")):
-            break
+    found = search_from_cache(novel["title"])
 
     if found:
         ok = update_notion_page(novel["id"], found, novel)
         print(f"  {'✅ 노션 업데이트 완료' if ok else '❌ 노션 업데이트 실패'}")
     else:
-        print("  ❌ 모든 플랫폼에서 정보 찾기 실패")
+        print("  ❌ JSON 캐시에서 정보 찾기 실패")
 
 print("\n🎉 완료!")
