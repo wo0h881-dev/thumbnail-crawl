@@ -2,7 +2,7 @@ import os
 import re
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import unquote
+from playwright.sync_api import sync_playwright
 
 NOTION_API_KEY = os.environ["NOTION_API_KEY"]
 NOTION_DB_ID = os.environ["NOTION_DB_ID"]
@@ -17,16 +17,33 @@ NOTION_HEADERS = {
     "Notion-Version": "2022-06-28",
 }
 
+BASE_RIDI_URL = "https://ridibooks.com"
+
+RIDI_CATEGORY_URLS = [
+    "https://ridibooks.com/bestsellers/fantasy_serial",
+    "https://ridibooks.com/bestsellers/romance_serial",
+    "https://ridibooks.com/bestsellers/romance_fantasy_serial",
+    "https://ridibooks.com/bestsellers/bl-webnovel",
+]
+
 
 def rich_text(value):
-    return [
-        {
-            "type": "text",
-            "text": {
-                "content": value or "",
-            },
-        }
-    ]
+    return [{"type": "text", "text": {"content": value or ""}}]
+
+
+def clean_value(value):
+    if not value:
+        return None
+
+    value = str(value)
+    value = re.sub(r"\s+", " ", value).strip()
+    value = value.strip(" :：|·,/")
+
+    bad_values = {"txt", "바로가기", "자동완성 끄기", "자동완성 켜기", "-"}
+    if not value or "@" in value or value.lower() in bad_values:
+        return None
+
+    return value
 
 
 def get_plain_text(prop):
@@ -37,16 +54,64 @@ def get_plain_text(prop):
     return "".join(t.get("plain_text", "") for t in values).strip()
 
 
+def fetch_soup_playwright(url, click_info_tab=False):
+    with sync_playwright() as p:
+        browser = p.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-dev-shm-usage"],
+        )
+
+        page = browser.new_page(
+            user_agent=HEADERS["User-Agent"],
+            viewport={"width": 1365, "height": 900},
+            locale="ko-KR",
+        )
+
+        page.goto(url, wait_until="networkidle", timeout=45000)
+        page.wait_for_timeout(1500)
+
+        if click_info_tab:
+            try:
+                info_tab = page.locator("span.font-small1", has_text="정보").first
+                if info_tab.count() > 0:
+                    info_tab.click()
+                    page.wait_for_timeout(1000)
+            except Exception as e:
+                print("  ⚠️ 정보 탭 클릭 실패:", e)
+
+        html = page.content()
+        browser.close()
+
+    return BeautifulSoup(html, "html.parser")
+
+
+def deep_find(obj, keys):
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if k in keys and v:
+                return v
+
+            found = deep_find(v, keys)
+            if found:
+                return found
+
+    if isinstance(obj, list):
+        for item in obj:
+            found = deep_find(item, keys)
+            if found:
+                return found
+
+    return None
+
+
 def get_novels_to_update():
     url = f"https://api.notion.com/v1/databases/{NOTION_DB_ID}/query"
     payload = {
         "filter": {
             "property": "platform",
-            "select": {
-                "is_not_empty": True
-            }
+            "select": {"is_not_empty": True},
         },
-        "page_size": 100
+        "page_size": 100,
     }
 
     results = []
@@ -93,73 +158,6 @@ def get_novels_to_update():
         payload["start_cursor"] = data["next_cursor"]
 
     return results
-
-
-def clean_value(value):
-    if not value:
-        return None
-
-    value = str(value)
-    value = re.sub(r"\s+", " ", value).strip()
-    value = value.strip(" :：|·,/")
-
-    if not value:
-        return None
-
-    bad_values = {"txt", "바로가기", "자동완성 끄기", "자동완성 켜기"}
-    if "@" in value or value.lower() in bad_values:
-        return None
-
-    return value
-
-def deep_find(obj, keys):
-    if isinstance(obj, dict):
-        for k, v in obj.items():
-            if k in keys and v:
-                return v
-            found = deep_find(v, keys)
-            if found:
-                return found
-
-    if isinstance(obj, list):
-        for item in obj:
-            found = deep_find(item, keys)
-            if found:
-                return found
-
-    return None
-
-
-
-def extract_author_publisher_from_text(text):
-    author = None
-    publisher = None
-
-    # 작가/글 라벨 뒤에 공백이 있을 때만 라벨로 인정
-    # 글근육 같은 작가명을 "근육"으로 자르지 않기 위함
-    author_patterns = [
-        r"(?:저자|작가|글)\s+([^|·,\n\r]+)",
-        r"작가명\s*[:：]\s*([^|·,\n\r]+)",
-    ]
-
-    publisher_patterns = [
-        r"(?:출판사|출판|제공)\s+([^|·,\n\r]+)",
-        r"출판사명\s*[:：]\s*([^|·,\n\r]+)",
-    ]
-
-    for pattern in author_patterns:
-        m = re.search(pattern, text)
-        if m:
-            author = clean_value(m.group(1))
-            break
-
-    for pattern in publisher_patterns:
-        m = re.search(pattern, text)
-        if m:
-            publisher = clean_value(m.group(1))
-            break
-
-    return author, publisher
 
 
 def crawl_naver(title):
@@ -226,55 +224,59 @@ def crawl_naver(title):
 
 def crawl_ridi(title):
     try:
-        urls = [
-            "https://ridibooks.com/bestsellers/fantasy_serial",
-            "https://ridibooks.com/bestsellers/romance_serial",
-            "https://ridibooks.com/bestsellers/romance_fantasy_serial",
-            "https://ridibooks.com/bestsellers/bl_serial",
-        ]
+        for url in RIDI_CATEGORY_URLS:
+            soup = fetch_soup_playwright(url)
 
-        ridi_headers = {
-            **HEADERS,
-            "Referer": "https://ridibooks.com/",
-            "Accept-Language": "ko-KR,ko;q=0.9",
-        }
+            cards = [
+                li for li in soup.select("li")
+                if li.select_one("a.fig-w1hthz")
+            ]
 
-        for url in urls:
-            res = requests.get(url, headers=ridi_headers, timeout=15)
-            html = res.text
+            for item in cards:
+                title_tag = item.select_one("a.fig-w1hthz")
+                item_title = clean_value(title_tag.get_text(" ", strip=True)) if title_tag else None
 
-            if title not in html:
-                continue
+                if item_title != title:
+                    continue
 
-            idx = html.find(title)
-            block = html[max(0, idx - 3000): idx + 5000]
+                work_path = title_tag.get("href", "")
+                work_id = ""
 
-            cover = None
-            cover_match = re.search(r'https://img\.ridicdn\.net/cover/[^"\']+', block)
-            if cover_match:
-                cover = cover_match.group(0)
-                cover = cover.replace("/small", "/large").split("?")[0] + "#1"
+                m_id = re.search(r"/books/(\d+)", work_path)
+                if m_id:
+                    work_id = m_id.group(1)
 
-            author = None
-            author_match = re.search(r'<a[^>]+href="/author/[^"]+"[^>]*>([^<]+)</a>', block)
-            if author_match:
-                author = clean_value(author_match.group(1))
+                cover = None
 
-            publisher = None
-            publisher_match = re.search(
-                r'<a[^>]+href="/search\?q=[^"]*%EC%B6%9C%ED%8C%90%EC%82%AC[^"]*"[^>]*>([^<]+)</a>',
-                block,
-            )
-            if publisher_match:
-                publisher = clean_value(publisher_match.group(1))
+                img = item.select_one("img[alt]")
+                if img:
+                    srcset = img.get("srcset", "")
+                    if srcset:
+                        candidates = [x.strip().split(" ")[0] for x in srcset.split(",")]
+                        large_candidates = [
+                            c for c in candidates
+                            if "/large" in c or "/xxlarge" in c
+                        ]
+                        cover = large_candidates[0] if large_candidates else candidates[-1]
+                    else:
+                        cover = img.get("src")
 
-            print(f"  ✅ 리디: cover={bool(cover)}, author={author}, publisher={publisher}")
+                if not cover and work_id:
+                    cover = f"https://img.ridicdn.net/cover/{work_id}/large#1"
 
-            return {
-                "cover": cover,
-                "author": author,
-                "publisher": publisher,
-            }
+                author_tag = item.select_one("a.fig-103urjl.e1s6unbg0")
+                publisher_tag = item.select_one("a.fig-103urjl.efs2tg41")
+
+                author = clean_value(author_tag.get_text(" ", strip=True)) if author_tag else None
+                publisher = clean_value(publisher_tag.get_text(" ", strip=True)) if publisher_tag else None
+
+                print(f"  ✅ 리디: cover={bool(cover)}, author={author}, publisher={publisher}")
+
+                return {
+                    "cover": cover,
+                    "author": author,
+                    "publisher": publisher,
+                }
 
         print("  ❌ 리디 순위 페이지에서 제목 없음")
         return None
@@ -287,7 +289,7 @@ def crawl_ridi(title):
 
 def crawl_kakao(title):
     try:
-        url = (
+        search_url = (
             "https://bff-page.kakao.com/api/gateway/api/v1/search/series"
             f"?keyword={requests.utils.quote(title)}"
             "&category_uid=11&is_complete=false&sort_type=ACCURACY&page=0&size=25"
@@ -300,7 +302,7 @@ def crawl_kakao(title):
             "Accept-Language": "ko-KR,ko;q=0.9",
         }
 
-        res = requests.get(url, headers=kakao_headers, timeout=15)
+        res = requests.get(search_url, headers=kakao_headers, timeout=15)
 
         if not res.ok:
             print(f"  ❌ 카카오 API 응답 실패: {res.status_code}")
@@ -322,7 +324,12 @@ def crawl_kakao(title):
         )
 
         author = deep_find(item, [
-            "author", "writer", "authors", "artist", "authorName", "writerName"
+            "author",
+            "writer",
+            "authors",
+            "artist",
+            "authorName",
+            "writerName",
         ])
 
         if isinstance(author, list):
@@ -332,25 +339,43 @@ def crawl_kakao(title):
             )
 
         publisher = deep_find(item, [
-            "publisher", "publisherName", "cpName", "provider",
-            "providerName", "company", "companyName", "copyright", "publisherName"
+            "publisher",
+            "publisherName",
+            "cpName",
+            "provider",
+            "providerName",
+            "company",
+            "companyName",
+            "copyright",
         ])
 
         content_id = deep_find(item, [
-            "seriesId", "id", "productId", "contentId", "series_id", "content_id", "uid"
+            "seriesId",
+            "id",
+            "productId",
+            "contentId",
+            "series_id",
+            "content_id",
+            "uid",
         ])
 
         if not publisher and content_id:
             detail_url = f"https://page.kakao.com/content/{content_id}"
-            detail_res = requests.get(detail_url, headers=kakao_headers, timeout=15)
-            detail_html = detail_res.text
+            detail_soup = fetch_soup_playwright(detail_url, click_info_tab=True)
 
-            m = re.search(
-                r'발행자</span>\s*<span[^>]*>([^<]+)</span>',
-                detail_html
-            )
-            if m:
-                publisher = m.group(1).strip()
+            publisher_span = detail_soup.find("span", string="발행자")
+            if publisher_span:
+                parent = publisher_span.find_parent("div")
+                if parent:
+                    spans = parent.find_all("span")
+                    if len(spans) >= 2:
+                        publisher = spans[1].get_text(" ", strip=True)
+
+            if not publisher:
+                detail_text = detail_soup.get_text(" ", strip=True)
+                m = re.search(r"발행자\s+([^\s|·,]+)", detail_text)
+                if m:
+                    publisher = m.group(1).strip()
 
         author = clean_value(author)
         publisher = clean_value(publisher)
@@ -367,14 +392,14 @@ def crawl_kakao(title):
         print(f"  ❌ 카카오 오류: {e}")
 
     return None
+
+
 def update_notion_page(page_id, found, novel):
     try:
         pid = page_id.replace("-", "")
         pid = f"{pid[:8]}-{pid[8:12]}-{pid[12:16]}-{pid[16:20]}-{pid[20:]}"
 
-        payload = {
-            "properties": {}
-        }
+        payload = {"properties": {}}
 
         if novel["needs_author"] and found.get("author"):
             payload["properties"]["저자 / 감독"] = {
@@ -389,9 +414,7 @@ def update_notion_page(page_id, found, novel):
         if novel["needs_cover"] and found.get("cover"):
             payload["cover"] = {
                 "type": "external",
-                "external": {
-                    "url": found["cover"]
-                }
+                "external": {"url": found["cover"]},
             }
 
         if not payload["properties"] and "cover" not in payload:
@@ -401,7 +424,7 @@ def update_notion_page(page_id, found, novel):
         res = requests.patch(
             f"https://api.notion.com/v1/pages/{pid}",
             headers=NOTION_HEADERS,
-            json=payload
+            json=payload,
         )
 
         if not res.ok:
