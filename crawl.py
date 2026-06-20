@@ -99,15 +99,19 @@ def clean_value(value):
         return None
 
     value = str(value)
-    value = re.sub(r"\s+", " ", value)
-    value = value.replace("저자", "")
-    value = value.replace("작가", "")
-    value = value.replace("출판사", "")
-    value = value.replace("출판", "")
-    value = value.replace("제공", "")
+    value = re.sub(r"\s+", " ", value).strip()
     value = value.strip(" :：|·,/")
 
-    return value.strip() or None
+    if not value:
+        return None
+
+    bad_values = {"txt", "바로가기", "자동완성 끄기", "자동완성 켜기"}
+    if "@" in value or value.lower() in bad_values:
+        return None
+
+    return value
+
+
 
 
 def extract_author_publisher_from_text(text):
@@ -162,30 +166,31 @@ def crawl_naver(title):
 
         detail_res = requests.get(detail_url, headers=HEADERS, timeout=10)
         detail_soup = BeautifulSoup(detail_res.text, "html.parser")
+        detail_text = detail_soup.get_text(" ", strip=True)
 
         author = None
         publisher = None
 
         author_a = detail_soup.select_one("a[href*='authorNo']")
         if author_a:
-            author = author_a.get_text(" ", strip=True)
+            author = clean_value(author_a.get_text(" ", strip=True))
 
-        publisher_a = detail_soup.select_one("a[href*='publisherNo']")
-        if publisher_a:
-            publisher = publisher_a.get_text(" ", strip=True)
+        if not author:
+            author_match = re.search(r"글\s+([^\s|·,]+)", detail_text)
+            if author_match:
+                author = clean_value(author_match.group(1))
 
-        if not author or not publisher:
-            detail_text = detail_soup.get_text(" ", strip=True)
+        publisher_match = re.search(r"출판사\s+([^\s|·,]+)", detail_text)
+        if publisher_match:
+            publisher = clean_value(publisher_match.group(1))
 
-            if not author:
-                author_match = re.search(r"글\s+([^\s|·,]+)", detail_text)
-                if author_match:
-                    author = author_match.group(1).strip()
-
-            if not publisher:
-                publisher_match = re.search(r"출판사\s+([^\s|·,]+)", detail_text)
-                if publisher_match:
-                    publisher = publisher_match.group(1).strip()
+        if not publisher:
+            publisher_links = detail_soup.select("a[href*='publisherNo']")
+            for publisher_a in publisher_links:
+                candidate = clean_value(publisher_a.get_text(" ", strip=True))
+                if candidate:
+                    publisher = candidate
+                    break
 
         print(f"  ✅ 네이버: cover={bool(cover)}, author={author}, publisher={publisher}")
 
@@ -199,6 +204,7 @@ def crawl_naver(title):
         print(f"  ❌ 네이버 오류: {e}")
 
     return None
+
 
 def crawl_ridi(title):
     try:
