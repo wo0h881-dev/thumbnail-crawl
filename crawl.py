@@ -209,37 +209,68 @@ def crawl_naver(title):
 
 def crawl_ridi(title):
     try:
-        url = f"https://ridibooks.com/search?q={requests.utils.quote(title)}&adult_exclude=n"
-        res = requests.get(url, headers=HEADERS, timeout=10)
-        html = res.text
+        urls = [
+            "https://ridibooks.com/bestsellers/fantasy_serial",
+            "https://ridibooks.com/bestsellers/romance_serial",
+            "https://ridibooks.com/bestsellers/romance_fantasy_serial",
+            "https://ridibooks.com/bestsellers/bl_serial",
+        ]
 
-        cover = None
-        matches = re.findall(r'https://img\.ridicdn\.net/cover/[^\s"\'<>]+', html)
-        if matches:
-            cover = matches[0].split('"')[0]
+        for url in urls:
+            res = requests.get(url, headers=HEADERS, timeout=10)
+            soup = BeautifulSoup(res.text, "html.parser")
 
-        author = None
-        publisher = None
+            target_img = None
+            for img in soup.select("img[alt]"):
+                if img.get("alt", "").strip() == title:
+                    target_img = img
+                    break
 
-        author_match = re.search(r'"author"\s*:\s*"([^"]+)"', html)
-        if author_match:
-            author = author_match.group(1).strip()
+            if not target_img:
+                continue
 
-        publisher_match = re.search(r'"publisher"\s*:\s*"([^"]+)"', html)
-        if publisher_match:
-            publisher = publisher_match.group(1).strip()
+            item = target_img.find_parent("li")
+            if not item:
+                item = target_img.find_parent("div")
 
-        print(f"  ✅ 리디: cover={bool(cover)}, author={author}, publisher={publisher}")
+            cover = None
+            srcset = target_img.get("srcset", "")
+            if srcset:
+                candidates = [x.strip().split(" ")[0] for x in srcset.split(",")]
+                large_candidates = [c for c in candidates if "/large" in c or "/xxlarge" in c]
+                cover = large_candidates[0] if large_candidates else candidates[-1]
 
-        if not cover and not author and not publisher:
-            print("  ❌ 리디 검색결과 없음")
-            return None
+            if not cover:
+                cover = target_img.get("src")
 
-        return {
-            "cover": cover,
-            "author": author,
-            "publisher": publisher,
-        }
+            author = None
+            publisher = None
+
+            author_a = item.select_one("a[href*='/author/']") if item else None
+            if author_a:
+                author = clean_value(author_a.get_text(" ", strip=True))
+
+            publisher_a = None
+            if item:
+                for a in item.select("a[href*='/search']"):
+                    href = a.get("href", "")
+                    if "출판사" in href or "%EC%B6%9C%ED%8C%90%EC%82%AC" in href:
+                        publisher_a = a
+                        break
+
+            if publisher_a:
+                publisher = clean_value(publisher_a.get_text(" ", strip=True))
+
+            print(f"  ✅ 리디: cover={bool(cover)}, author={author}, publisher={publisher}")
+
+            return {
+                "cover": cover,
+                "author": author,
+                "publisher": publisher,
+            }
+
+        print("  ❌ 리디 순위 페이지에서 제목 없음")
+        return None
 
     except Exception as e:
         print(f"  ❌ 리디 오류: {e}")
@@ -278,15 +309,19 @@ def crawl_kakao(title):
         item = items[0]
 
         thumbnail_key = item.get("thumbnail")
-        cover = None
-        if thumbnail_key:
-            cover = f"https://dn-img-page.kakao.com/download/resource?kid={thumbnail_key}&filename=th3"
+        cover = (
+            f"https://dn-img-page.kakao.com/download/resource?kid={thumbnail_key}&filename=th3"
+            if thumbnail_key
+            else None
+        )
 
         author = (
             item.get("author")
             or item.get("writer")
             or item.get("authors")
             or item.get("artist")
+            or item.get("authorName")
+            or item.get("writerName")
         )
 
         if isinstance(author, list):
@@ -300,7 +335,43 @@ def crawl_kakao(title):
             or item.get("publisherName")
             or item.get("cpName")
             or item.get("provider")
+            or item.get("providerName")
+            or item.get("company")
+            or item.get("companyName")
+            or item.get("copyright")
         )
+
+        content_id = (
+            item.get("seriesId")
+            or item.get("id")
+            or item.get("productId")
+            or item.get("contentId")
+            or item.get("series_id")
+            or item.get("content_id")
+        )
+
+        if not publisher and content_id:
+            detail_url = f"https://page.kakao.com/content/{content_id}"
+            detail_res = requests.get(
+                detail_url,
+                headers={
+                    "User-Agent": HEADERS["User-Agent"],
+                    "Referer": "https://page.kakao.com/",
+                },
+                timeout=10,
+            )
+
+            detail_html = detail_res.text
+
+            publisher_match = re.search(
+                r"발행자</span>\s*<span[^>]*>([^<]+)</span>",
+                detail_html,
+            )
+            if publisher_match:
+                publisher = publisher_match.group(1).strip()
+
+        author = clean_value(author)
+        publisher = clean_value(publisher)
 
         print(f"  ✅ 카카오: cover={bool(cover)}, author={author}, publisher={publisher}")
 
@@ -314,7 +385,6 @@ def crawl_kakao(title):
         print(f"  ❌ 카카오 오류: {e}")
 
     return None
-
 
 def update_notion_page(page_id, found, novel):
     try:
