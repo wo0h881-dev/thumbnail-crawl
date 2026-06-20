@@ -2,6 +2,7 @@ import os
 import re
 import requests
 from bs4 import BeautifulSoup
+from urllib.parse import unquote
 
 NOTION_API_KEY = os.environ["NOTION_API_KEY"]
 NOTION_DB_ID = os.environ["NOTION_DB_ID"]
@@ -111,6 +112,22 @@ def clean_value(value):
 
     return value
 
+def deep_find(obj, keys):
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if k in keys and v:
+                return v
+            found = deep_find(v, keys)
+            if found:
+                return found
+
+    if isinstance(obj, list):
+        for item in obj:
+            found = deep_find(item, keys)
+            if found:
+                return found
+
+    return None
 
 
 
@@ -216,50 +233,40 @@ def crawl_ridi(title):
             "https://ridibooks.com/bestsellers/bl_serial",
         ]
 
+        ridi_headers = {
+            **HEADERS,
+            "Referer": "https://ridibooks.com/",
+            "Accept-Language": "ko-KR,ko;q=0.9",
+        }
+
         for url in urls:
-            res = requests.get(url, headers=HEADERS, timeout=10)
-            soup = BeautifulSoup(res.text, "html.parser")
+            res = requests.get(url, headers=ridi_headers, timeout=15)
+            html = res.text
 
-            target_img = None
-            for img in soup.select("img[alt]"):
-                if img.get("alt", "").strip() == title:
-                    target_img = img
-                    break
-
-            if not target_img:
+            if title not in html:
                 continue
 
-            item = target_img.find_parent("li")
-            if not item:
-                item = target_img.find_parent("div")
+            idx = html.find(title)
+            block = html[max(0, idx - 3000): idx + 5000]
 
             cover = None
-            srcset = target_img.get("srcset", "")
-            if srcset:
-                candidates = [x.strip().split(" ")[0] for x in srcset.split(",")]
-                large_candidates = [c for c in candidates if "/large" in c or "/xxlarge" in c]
-                cover = large_candidates[0] if large_candidates else candidates[-1]
-
-            if not cover:
-                cover = target_img.get("src")
+            cover_match = re.search(r'https://img\.ridicdn\.net/cover/[^"\']+', block)
+            if cover_match:
+                cover = cover_match.group(0)
+                cover = cover.replace("/small", "/large").split("?")[0] + "#1"
 
             author = None
+            author_match = re.search(r'<a[^>]+href="/author/[^"]+"[^>]*>([^<]+)</a>', block)
+            if author_match:
+                author = clean_value(author_match.group(1))
+
             publisher = None
-
-            author_a = item.select_one("a[href*='/author/']") if item else None
-            if author_a:
-                author = clean_value(author_a.get_text(" ", strip=True))
-
-            publisher_a = None
-            if item:
-                for a in item.select("a[href*='/search']"):
-                    href = a.get("href", "")
-                    if "출판사" in href or "%EC%B6%9C%ED%8C%90%EC%82%AC" in href:
-                        publisher_a = a
-                        break
-
-            if publisher_a:
-                publisher = clean_value(publisher_a.get_text(" ", strip=True))
+            publisher_match = re.search(
+                r'<a[^>]+href="/search\?q=[^"]*%EC%B6%9C%ED%8C%90%EC%82%AC[^"]*"[^>]*>([^<]+)</a>',
+                block,
+            )
+            if publisher_match:
+                publisher = clean_value(publisher_match.group(1))
 
             print(f"  ✅ 리디: cover={bool(cover)}, author={author}, publisher={publisher}")
 
@@ -286,15 +293,14 @@ def crawl_kakao(title):
             "&category_uid=11&is_complete=false&sort_type=ACCURACY&page=0&size=25"
         )
 
-        res = requests.get(
-            url,
-            headers={
-                "User-Agent": HEADERS["User-Agent"],
-                "Referer": "https://page.kakao.com/",
-                "Origin": "https://page.kakao.com",
-            },
-            timeout=10,
-        )
+        kakao_headers = {
+            "User-Agent": HEADERS["User-Agent"],
+            "Referer": "https://page.kakao.com/",
+            "Origin": "https://page.kakao.com",
+            "Accept-Language": "ko-KR,ko;q=0.9",
+        }
+
+        res = requests.get(url, headers=kakao_headers, timeout=15)
 
         if not res.ok:
             print(f"  ❌ 카카오 API 응답 실패: {res.status_code}")
@@ -308,21 +314,16 @@ def crawl_kakao(title):
 
         item = items[0]
 
-        thumbnail_key = item.get("thumbnail")
+        thumbnail_key = deep_find(item, ["thumbnail", "thumbnailUrl", "image"])
         cover = (
             f"https://dn-img-page.kakao.com/download/resource?kid={thumbnail_key}&filename=th3"
-            if thumbnail_key
-            else None
+            if thumbnail_key and not str(thumbnail_key).startswith("http")
+            else thumbnail_key
         )
 
-        author = (
-            item.get("author")
-            or item.get("writer")
-            or item.get("authors")
-            or item.get("artist")
-            or item.get("authorName")
-            or item.get("writerName")
-        )
+        author = deep_find(item, [
+            "author", "writer", "authors", "artist", "authorName", "writerName"
+        ])
 
         if isinstance(author, list):
             author = ", ".join(
@@ -330,45 +331,26 @@ def crawl_kakao(title):
                 for a in author
             )
 
-        publisher = (
-            item.get("publisher")
-            or item.get("publisherName")
-            or item.get("cpName")
-            or item.get("provider")
-            or item.get("providerName")
-            or item.get("company")
-            or item.get("companyName")
-            or item.get("copyright")
-        )
+        publisher = deep_find(item, [
+            "publisher", "publisherName", "cpName", "provider",
+            "providerName", "company", "companyName", "copyright", "publisherName"
+        ])
 
-        content_id = (
-            item.get("seriesId")
-            or item.get("id")
-            or item.get("productId")
-            or item.get("contentId")
-            or item.get("series_id")
-            or item.get("content_id")
-        )
+        content_id = deep_find(item, [
+            "seriesId", "id", "productId", "contentId", "series_id", "content_id", "uid"
+        ])
 
         if not publisher and content_id:
             detail_url = f"https://page.kakao.com/content/{content_id}"
-            detail_res = requests.get(
-                detail_url,
-                headers={
-                    "User-Agent": HEADERS["User-Agent"],
-                    "Referer": "https://page.kakao.com/",
-                },
-                timeout=10,
-            )
-
+            detail_res = requests.get(detail_url, headers=kakao_headers, timeout=15)
             detail_html = detail_res.text
 
-            publisher_match = re.search(
-                r"발행자</span>\s*<span[^>]*>([^<]+)</span>",
-                detail_html,
+            m = re.search(
+                r'발행자</span>\s*<span[^>]*>([^<]+)</span>',
+                detail_html
             )
-            if publisher_match:
-                publisher = publisher_match.group(1).strip()
+            if m:
+                publisher = m.group(1).strip()
 
         author = clean_value(author)
         publisher = clean_value(publisher)
@@ -385,7 +367,6 @@ def crawl_kakao(title):
         print(f"  ❌ 카카오 오류: {e}")
 
     return None
-
 def update_notion_page(page_id, found, novel):
     try:
         pid = page_id.replace("-", "")
